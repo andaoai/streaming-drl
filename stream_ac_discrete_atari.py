@@ -5,6 +5,7 @@ import torch.nn as nn
 import gymnasium as gym
 import torch.nn.functional as F
 from torch.distributions import Categorical
+from model import PolicyNetwork, ValueNetwork, initialize_weights
 from optim import ObGD as Optimizer
 from stable_baselines3.common.atari_wrappers import (
     EpisodicLifeEnv,
@@ -16,55 +17,16 @@ import torch.nn.functional as F
 from normalization_wrappers import NormalizeObservation, ScaleReward
 from sparse_init import sparse_init
 
-class LayerNormalization(nn.Module):
-    def __init__(self):
-        super().__init__()
-    def forward(self, input):
-        return F.layer_norm(input, input.size())
-    def extra_repr(self) -> str:
-        return "Layer Normalization"
-
-def initialize_weights(m):
-    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-        sparse_init(m.weight, sparsity=0.9)
-        m.bias.data.fill_(0.0)
-
 class StreamAC(nn.Module):
     def __init__(self, n_actions=3, hidden_size=256, lr=1.0, gamma=0.99, lamda=0.8, kappa_policy=3.0, kappa_value=2.0):
         super(StreamAC, self).__init__()
         self.gamma = gamma
-        self.network_value = nn.Sequential(
-            nn.Conv2d(4, 32, 8, stride=5),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 64, 4, stride=3),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Conv2d(64, 64, 3, stride=2),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Flatten(start_dim=0),
-            nn.Linear(256, hidden_size),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_size, 1)
-        )
-        self.network_policy = nn.Sequential(
-            nn.Conv2d(4, 32, 8, stride=5),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 64, 4, stride=3),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Conv2d(64, 64, 3, stride=2),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Flatten(start_dim=0),
-            nn.Linear(256, hidden_size),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Linear(hidden_size, n_actions)
-        )
+        
+        # Value network
+        # Policy network
+        self.network_value = ValueNetwork(hidden_size)
+        self.network_policy = PolicyNetwork(hidden_size, n_actions)
+
         self.apply(initialize_weights)
         self.optimizer_policy = Optimizer(self.network_policy.parameters(), lr=lr, gamma=gamma, lamda=lamda, kappa=kappa_policy)
         self.optimizer_value = Optimizer(self.network_value.parameters(), lr=lr, gamma=gamma, lamda=lamda, kappa=kappa_value)
@@ -86,9 +48,13 @@ class StreamAC(nn.Module):
 
     def update_params(self, s, a, r, s_prime, done, entropy_coeff, overshooting_info=False):
         done_mask = 0 if done else 1
-        s, a, r, s_prime, done_mask = torch.tensor(np.array(s), dtype=torch.float64), torch.tensor(np.array(a)), \
-                                         torch.tensor(np.array(r)), torch.tensor(np.array(s_prime), dtype=torch.float64), \
-                                         torch.tensor(np.array(done_mask), dtype=torch.float64)
+        s, a, r, s_prime, done_mask = (
+            torch.tensor(np.array(s), dtype=torch.float64),
+            torch.tensor(np.array(a)),
+            torch.tensor(np.array(r)),
+            torch.tensor(np.array(s_prime), dtype=torch.float64),
+            torch.tensor(np.array(done_mask), dtype=torch.float64)
+        )
 
         v_s, v_prime = self.v(s), self.v(s_prime)
         td_target = r + self.gamma * v_prime * done_mask
@@ -100,6 +66,7 @@ class StreamAC(nn.Module):
         log_prob_pi = -(dist.log_prob(a)).sum()
         value_output = -v_s
         entropy_pi = -entropy_coeff * dist.entropy().sum() * torch.sign(delta).item()
+        
         self.optimizer_value.zero_grad()
         self.optimizer_policy.zero_grad()
         value_output.backward()
@@ -126,7 +93,7 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, entropy_coeff, kappa_pol
     env = gym.wrappers.ResizeObservation(env, (84, 84))
     env = gym.wrappers.GrayScaleObservation(env)
     env = NormalizeObservation(env)
-    env = gym.wrappers.FrameStack(env, 4)
+    env = gym.wrappers.FrameStack(env, 8)
     env = ScaleReward(env, gamma=gamma)
     agent = StreamAC(n_actions=env.action_space.n, lr=lr, gamma=gamma, lamda=lamda, kappa_policy=kappa_policy, kappa_value=kappa_value)
     if debug:
@@ -155,7 +122,7 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, entropy_coeff, kappa_pol
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Stream AC(λ)')
-    parser.add_argument('--env_name', type=str, default='BreakoutNoFrameskip-v4')
+    parser.add_argument('--env_name', type=str, default='AssaultNoFrameskip-v4')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--lr', type=float, default=1.0)
     parser.add_argument('--gamma', type=float, default=0.99)
@@ -164,7 +131,7 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_coeff', type=float, default=0.01)
     parser.add_argument('--kappa_policy', type=float, default=3.0)
     parser.add_argument('--kappa_value', type=float, default=2.0)
-    parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--overshooting_info', action='store_true')
     parser.add_argument('--render', action='store_true')
     args = parser.parse_args()
