@@ -1,19 +1,5 @@
-import os, pickle, argparse
-import torch
-import numpy as np
 import torch.nn as nn
-import gymnasium as gym
 import torch.nn.functional as F
-from torch.distributions import Categorical
-from optim import ObGD as Optimizer
-from stable_baselines3.common.atari_wrappers import (
-    EpisodicLifeEnv,
-    FireResetEnv,
-    MaxAndSkipEnv,
-    NoopResetEnv,
-)
-import torch.nn.functional as F
-from normalization_wrappers import NormalizeObservation, ScaleReward
 from sparse_init import sparse_init
 
 def initialize_weights(m):
