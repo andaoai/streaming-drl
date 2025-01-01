@@ -1,6 +1,8 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sparse_init import sparse_init
+import torchvision.models as models
 
 def initialize_weights(m):
     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
@@ -98,3 +100,40 @@ class PolicyNetwork(nn.Module):
         out = self.relu2(out)
         policy = self.fc2(out)
         return policy
+    
+
+# 定义一个恒等映射的模块
+class Identity(nn.Module):
+    def __init__(self):
+        # 调用父类的构造函数
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        # 前向传播函数，直接返回输入
+        return x
+
+# 定义一个SimCLR模型
+class SimCLR(nn.Module):
+    def __init__(self, linear_eval=False):
+        # 调用父类的构造函数
+        super().__init__()
+        self.linear_eval = linear_eval  # 是否进行线性评估的标志
+        resnet18 = models.resnet18(pretrained=False)  # 加载ResNet-18模型，不使用预训练权重
+        resnet18.fc = Identity()  # 将ResNet的全连接层替换为恒等映射
+        self.encoder = resnet18  # 将修改后的ResNet作为编码器
+        # 定义投影头，由两个线性层和一个ReLU激活函数组成
+        self.projection = nn.Sequential(
+            nn.Linear(512, 256),  # 第一个线性层，将输入特征从512维映射到256维
+            nn.ReLU(),  # ReLU激活函数
+            nn.Linear(256, 64)  # 第二个线性层，将输入特征从256维映射到64维
+        )
+
+    def forward(self, x):
+        # 前向传播函数
+        if not self.linear_eval:
+            # 如果不是线性评估，拼接输入张量
+            x = torch.cat(x, dim=0)  # 在第0维拼接输入的多个样本
+
+        encoding = self.encoder(x)  # 通过编码器获取特征表示
+        projection = self.projection(encoding)  # 通过投影头获取投影特征
+        return projection  # 返回投影特征
